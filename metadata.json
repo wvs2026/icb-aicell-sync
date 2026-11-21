@@ -1,0 +1,6 @@
+{
+  "name": "CELL-SYNC | 비전·로봇·PLC 연동 장비 개발 관리",
+  "description": "머신비전 카메라 3대, 다관절 로봇, PLC, 모니터링 PC 연동 장비 개발용 5인 실시간 공유 프로젝트 관리 워크스페이스",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

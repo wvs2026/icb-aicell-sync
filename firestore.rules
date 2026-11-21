@@ -1,0 +1,602 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Pillar 0: Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Global Hardened Primitives
+    // -------------------------------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidInviteCode(code) {
+      return code is string && code.size() == 6 && code.matches('^[A-Z0-9]{6}$');
+    }
+
+    function isValidDateStr(val) {
+      return val is string && val.size() == 10 && val.matches('^\\d{4}-\\d{2}-\\d{2}$');
+    }
+
+    function isValidRole(role) {
+      return role in ['PM', 'VISION', 'ROBOT', 'PLC', 'UI'];
+    }
+
+    function isValidChecklistModule(mod) {
+      return mod in ['VISION', 'ROBOT', 'PLC', 'UI'];
+    }
+
+    function isValidIssueModule(mod) {
+      return mod in ['VISION', 'ROBOT', 'PLC', 'UI', 'SYSTEM'];
+    }
+
+    function isValidImpactModules(mods) {
+      return mods is list
+        && mods.size() >= 1
+        && mods.size() <= 5
+        && mods[0] is string
+        && mods.hasOnly(['VISION', 'ROBOT', 'PLC', 'UI', 'MECH']);
+    }
+
+    function isValidMemberUids(uids) {
+      return uids is list
+        && uids.size() >= 1
+        && uids.size() <= 10
+        && uids[0] is string;
+    }
+
+    function projectPath(projectId) {
+      return /databases/$(database)/documents/projects/$(projectId);
+    }
+
+    function isProjectMember(projectId) {
+      return isSignedIn()
+        && exists(projectPath(projectId))
+        && request.auth.uid in get(projectPath(projectId)).data.memberUids;
+    }
+
+    function isProjectOwner(projectId) {
+      return isSignedIn()
+        && exists(projectPath(projectId))
+        && get(projectPath(projectId)).data.ownerId == request.auth.uid;
+    }
+
+    // -------------------------------------------------------------------------
+    // Entity Validation Blueprints (Anti-Update-Gap)
+    // -------------------------------------------------------------------------
+    function isValidProject(data) {
+      return data.keys().hasAll([
+          'name', 'description', 'targetDate', 'inviteCode', 'lastJoinCode',
+          'ownerId', 'memberUids', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'name', 'description', 'targetDate', 'inviteCode', 'lastJoinCode',
+          'ownerId', 'memberUids', 'createdAt', 'updatedAt'
+        ])
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
+        && data.description is string && data.description.size() <= 500
+        && isValidDateStr(data.targetDate)
+        && isValidInviteCode(data.inviteCode)
+        && isValidInviteCode(data.lastJoinCode)
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && isValidMemberUids(data.memberUids)
+        && data.ownerId in data.memberUids
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidInvite(data) {
+      return data.keys().hasAll(['projectId', 'projectName', 'ownerId', 'createdAt'])
+        && data.keys().hasOnly(['projectId', 'projectName', 'ownerId', 'createdAt'])
+        && isValidId(data.projectId)
+        && data.projectName is string && data.projectName.size() >= 1 && data.projectName.size() <= 100
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
+        && data.createdAt is timestamp;
+    }
+
+    function isValidTeamMember(data, projectId) {
+      return data.keys().hasAll([
+          'projectId', 'uid', 'displayName', 'role', 'specialty', 'isClaimed', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'projectId', 'uid', 'displayName', 'role', 'specialty', 'isClaimed', 'updatedAt'
+        ])
+        && data.projectId == projectId
+        && isValidId(data.projectId)
+        && data.uid is string && data.uid.size() <= 128
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60
+        && isValidRole(data.role)
+        && data.specialty is string && data.specialty.size() >= 1 && data.specialty.size() <= 120
+        && data.isClaimed is bool
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChecklistItem(data, projectId) {
+      return data.keys().hasAll([
+          'projectId', 'module', 'stage', 'isInterface', 'interfacePair', 'title',
+          'status', 'assigneeRole', 'assigneeName', 'dueDate', 'notes', 'sortOrder',
+          'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'projectId', 'module', 'stage', 'isInterface', 'interfacePair', 'title',
+          'status', 'assigneeRole', 'assigneeName', 'dueDate', 'notes', 'sortOrder',
+          'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.projectId == projectId
+        && isValidId(data.projectId)
+        && isValidChecklistModule(data.module)
+        && data.stage is string && data.stage.size() >= 1 && data.stage.size() <= 80
+        && data.isInterface is bool
+        && data.interfacePair is string && data.interfacePair.size() <= 60
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+        && data.status in ['todo', 'in_progress', 'done']
+        && isValidRole(data.assigneeRole)
+        && data.assigneeName is string && data.assigneeName.size() >= 1 && data.assigneeName.size() <= 60
+        && isValidDateStr(data.dueDate)
+        && data.notes is string && data.notes.size() <= 1000
+        && data.sortOrder is number && data.sortOrder >= 0 && data.sortOrder <= 10000
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidRocChange(data, projectId) {
+      return data.keys().hasAll([
+          'projectId', 'code', 'title', 'asIs', 'toBe', 'reason', 'impactModules',
+          'status', 'requesterName', 'requesterRole', 'reviewerName', 'reviewComment',
+          'targetApplyDate', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'projectId', 'code', 'title', 'asIs', 'toBe', 'reason', 'impactModules',
+          'status', 'requesterName', 'requesterRole', 'reviewerName', 'reviewComment',
+          'targetApplyDate', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.projectId == projectId
+        && isValidId(data.projectId)
+        && data.code is string && data.code.size() <= 12 && data.code.matches('^ROC-\\d{3,4}$')
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+        && data.asIs is string && data.asIs.size() >= 1 && data.asIs.size() <= 1000
+        && data.toBe is string && data.toBe.size() >= 1 && data.toBe.size() <= 1000
+        && data.reason is string && data.reason.size() >= 1 && data.reason.size() <= 1000
+        && isValidImpactModules(data.impactModules)
+        && data.status in ['pending', 'approved', 'on_hold', 'rejected']
+        && data.requesterName is string && data.requesterName.size() >= 1 && data.requesterName.size() <= 60
+        && isValidRole(data.requesterRole)
+        && data.reviewerName is string && data.reviewerName.size() <= 60
+        && data.reviewComment is string && data.reviewComment.size() <= 1000
+        && isValidDateStr(data.targetApplyDate)
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidIssue(data, projectId) {
+      return data.keys().hasAll([
+          'projectId', 'code', 'title', 'description', 'module', 'priority', 'status',
+          'assigneeName', 'assigneeRole', 'dueDate', 'linkedDecisionId',
+          'linkedDecisionCode', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'projectId', 'code', 'title', 'description', 'module', 'priority', 'status',
+          'assigneeName', 'assigneeRole', 'dueDate', 'linkedDecisionId',
+          'linkedDecisionCode', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.projectId == projectId
+        && isValidId(data.projectId)
+        && data.code is string && data.code.size() <= 12 && data.code.matches('^ISS-\\d{3,4}$')
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+        && data.description is string && data.description.size() >= 1 && data.description.size() <= 1500
+        && isValidIssueModule(data.module)
+        && data.priority in ['blocker', 'high', 'medium']
+        && data.status in ['open', 'in_review', 'resolved']
+        && data.assigneeName is string && data.assigneeName.size() >= 1 && data.assigneeName.size() <= 60
+        && isValidRole(data.assigneeRole)
+        && isValidDateStr(data.dueDate)
+        && data.linkedDecisionId is string && data.linkedDecisionId.size() <= 128
+        && data.linkedDecisionCode is string && data.linkedDecisionCode.size() <= 16
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDecision(data, projectId) {
+      return data.keys().hasAll([
+          'projectId', 'code', 'title', 'decisionSummary', 'rationale', 'impactModules',
+          'decidedByName', 'decidedDate', 'sourceIssueId', 'sourceIssueCode',
+          'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'projectId', 'code', 'title', 'decisionSummary', 'rationale', 'impactModules',
+          'decidedByName', 'decidedDate', 'sourceIssueId', 'sourceIssueCode',
+          'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.projectId == projectId
+        && isValidId(data.projectId)
+        && data.code is string && data.code.size() <= 12 && data.code.matches('^DEC-\\d{3,4}$')
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+        && data.decisionSummary is string && data.decisionSummary.size() >= 1 && data.decisionSummary.size() <= 1500
+        && data.rationale is string && data.rationale.size() >= 1 && data.rationale.size() <= 1500
+        && isValidImpactModules(data.impactModules)
+        && data.decidedByName is string && data.decidedByName.size() >= 1 && data.decidedByName.size() <= 60
+        && isValidDateStr(data.decidedDate)
+        && data.sourceIssueId is string && data.sourceIssueId.size() <= 128
+        && data.sourceIssueCode is string && data.sourceIssueCode.size() <= 16
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /invites/{inviteCode}
+    // -------------------------------------------------------------------------
+    match /invites/{inviteCode} {
+      // Exact code lookup only — never allow listing/scraping invite codes
+      allow get: if isSignedIn() && isValidInviteCode(inviteCode);
+      allow list: if false;
+
+      allow create: if isVerified()
+        && isValidInviteCode(inviteCode)
+        && isValidInvite(incoming())
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && existsAfter(projectPath(incoming().projectId));
+
+      allow update: if false;
+
+      allow delete: if isVerified()
+        && isValidInviteCode(inviteCode)
+        && existing().ownerId == request.auth.uid;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /projects/{projectId}
+    // -------------------------------------------------------------------------
+    match /projects/{projectId} {
+      allow get: if isSignedIn()
+        && isValidId(projectId)
+        && request.auth.uid in existing().memberUids;
+
+      // Secure list query: strictly evaluates resource.data against request.auth.uid
+      allow list: if isSignedIn()
+        && request.auth.uid in resource.data.memberUids;
+
+      allow create: if isVerified()
+        && isValidId(projectId)
+        && isValidProject(incoming())
+        && incoming().ownerId == request.auth.uid
+        && incoming().memberUids.size() == 1
+        && incoming().memberUids[0] == request.auth.uid
+        && incoming().lastJoinCode == incoming().inviteCode
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && existsAfter(/databases/$(database)/documents/invites/$(incoming().inviteCode));
+
+      allow update: if isVerified()
+        && isValidId(projectId)
+        && isValidProject(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().inviteCode == existing().inviteCode
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action 1: Owner updates project metadata
+          (
+            existing().ownerId == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'targetDate', 'updatedAt'])
+          )
+          ||
+          // Action 2: Authenticated user joins via verified inviteCode
+          (
+            !(request.auth.uid in existing().memberUids)
+            && existing().memberUids.size() < 10
+            && incoming().memberUids.size() == existing().memberUids.size() + 1
+            && request.auth.uid in incoming().memberUids
+            && incoming().memberUids.hasAll(existing().memberUids)
+            && incoming().lastJoinCode == existing().inviteCode
+            && incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'lastJoinCode', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isVerified()
+        && isValidId(projectId)
+        && existing().ownerId == request.auth.uid;
+
+      // -----------------------------------------------------------------------
+      // Subcollection: /projects/{projectId}/members/{memberId}
+      // -----------------------------------------------------------------------
+      match /members/{memberId} {
+        allow get: if isSignedIn()
+          && isValidId(projectId)
+          && isValidId(memberId)
+          && isProjectMember(projectId);
+
+        allow list: if isSignedIn()
+          && resource.data.projectId == projectId
+          && isProjectMember(projectId);
+
+        allow create: if isVerified()
+          && isValidId(projectId)
+          && isValidId(memberId)
+          && isValidTeamMember(incoming(), projectId)
+          && incoming().updatedAt == request.time
+          && isProjectMember(projectId);
+
+        allow update: if isVerified()
+          && isValidId(projectId)
+          && isValidId(memberId)
+          && isValidTeamMember(incoming(), projectId)
+          && incoming().projectId == existing().projectId
+          && incoming().updatedAt == request.time
+          && isProjectMember(projectId)
+          && (
+            // Action 1: Claim an unclaimed role slot or update own claimed slot
+            (
+              (!existing().isClaimed || existing().uid == request.auth.uid)
+              && incoming().uid == request.auth.uid
+              && incoming().isClaimed == true
+              && incoming().diff(existing()).affectedKeys().hasOnly(['uid', 'displayName', 'specialty', 'isClaimed', 'updatedAt'])
+            )
+            ||
+            // Action 2: Release own claimed role slot
+            (
+              existing().uid == request.auth.uid
+              && incoming().uid == ''
+              && incoming().isClaimed == false
+              && incoming().diff(existing()).affectedKeys().hasOnly(['uid', 'isClaimed', 'updatedAt'])
+            )
+            ||
+            // Action 3: Project owner updates member roster metadata
+            (
+              isProjectOwner(projectId)
+              && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'role', 'specialty', 'updatedAt'])
+            )
+          );
+
+        allow delete: if isVerified()
+          && isValidId(projectId)
+          && isValidId(memberId)
+          && isProjectOwner(projectId);
+      }
+
+      // -----------------------------------------------------------------------
+      // Subcollection: /projects/{projectId}/checklists/{itemId}
+      // -----------------------------------------------------------------------
+      match /checklists/{itemId} {
+        allow get: if isSignedIn()
+          && isValidId(projectId)
+          && isValidId(itemId)
+          && isProjectMember(projectId);
+
+        allow list: if isSignedIn()
+          && resource.data.projectId == projectId
+          && isProjectMember(projectId);
+
+        allow create: if isVerified()
+          && isValidId(projectId)
+          && isValidId(itemId)
+          && isValidChecklistItem(incoming(), projectId)
+          && incoming().createdBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isProjectMember(projectId);
+
+        allow update: if isVerified()
+          && isValidId(projectId)
+          && isValidId(itemId)
+          && isValidChecklistItem(incoming(), projectId)
+          && incoming().projectId == existing().projectId
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && isProjectMember(projectId)
+          && (
+            // Action 1: Toggle or update status
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+            ||
+            // Action 2: Edit checklist details & notes
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'module', 'stage', 'isInterface', 'interfacePair', 'title',
+              'status', 'assigneeRole', 'assigneeName', 'dueDate', 'notes', 'updatedAt'
+            ])
+          );
+
+        allow delete: if isVerified()
+          && isValidId(projectId)
+          && isValidId(itemId)
+          && isProjectMember(projectId);
+      }
+
+      // -----------------------------------------------------------------------
+      // Subcollection: /projects/{projectId}/rocChanges/{rocId}
+      // -----------------------------------------------------------------------
+      match /rocChanges/{rocId} {
+        allow get: if isSignedIn()
+          && isValidId(projectId)
+          && isValidId(rocId)
+          && isProjectMember(projectId);
+
+        allow list: if isSignedIn()
+          && resource.data.projectId == projectId
+          && isProjectMember(projectId);
+
+        allow create: if isVerified()
+          && isValidId(projectId)
+          && isValidId(rocId)
+          && isValidRocChange(incoming(), projectId)
+          && incoming().createdBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isProjectMember(projectId);
+
+        allow update: if isVerified()
+          && isValidId(projectId)
+          && isValidId(rocId)
+          && isValidRocChange(incoming(), projectId)
+          && incoming().projectId == existing().projectId
+          && incoming().code == existing().code
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && isProjectMember(projectId)
+          && (
+            // Action 1: Approval status transition & review comment
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'reviewerName', 'reviewComment', 'updatedAt'
+            ])
+            ||
+            // Action 2: Edit ROC spec content while not finalized as rejected
+            (
+              existing().status != 'rejected'
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'title', 'asIs', 'toBe', 'reason', 'impactModules',
+                'targetApplyDate', 'updatedAt'
+              ])
+            )
+          );
+
+        allow delete: if isVerified()
+          && isValidId(projectId)
+          && isValidId(rocId)
+          && (existing().createdBy == request.auth.uid || isProjectOwner(projectId))
+          && isProjectMember(projectId);
+      }
+
+      // -----------------------------------------------------------------------
+      // Subcollection: /projects/{projectId}/issues/{issueId}
+      // -----------------------------------------------------------------------
+      match /issues/{issueId} {
+        allow get: if isSignedIn()
+          && isValidId(projectId)
+          && isValidId(issueId)
+          && isProjectMember(projectId);
+
+        allow list: if isSignedIn()
+          && resource.data.projectId == projectId
+          && isProjectMember(projectId);
+
+        allow create: if isVerified()
+          && isValidId(projectId)
+          && isValidId(issueId)
+          && isValidIssue(incoming(), projectId)
+          && incoming().status in ['open', 'in_review']
+          && incoming().linkedDecisionId == ''
+          && incoming().linkedDecisionCode == ''
+          && incoming().createdBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isProjectMember(projectId);
+
+        allow update: if isVerified()
+          && isValidId(projectId)
+          && isValidId(issueId)
+          && isValidIssue(incoming(), projectId)
+          && existing().status != 'resolved'
+          && incoming().projectId == existing().projectId
+          && incoming().code == existing().code
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && isProjectMember(projectId)
+          && (
+            // Action 1: Update open issue fields or move between open <-> in_review
+            (
+              incoming().status in ['open', 'in_review']
+              && incoming().linkedDecisionId == ''
+              && incoming().linkedDecisionCode == ''
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'title', 'description', 'module', 'priority', 'status',
+                'assigneeName', 'assigneeRole', 'dueDate', 'updatedAt'
+              ])
+            )
+            ||
+            // Action 2: Atomic one-click conversion from Open Issue -> Confirmed Decision
+            (
+              incoming().status == 'resolved'
+              && isValidId(incoming().linkedDecisionId)
+              && incoming().linkedDecisionCode.matches('^DEC-\\d{3,4}$')
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'status', 'linkedDecisionId', 'linkedDecisionCode', 'updatedAt'
+              ])
+              && existsAfter(/databases/$(database)/documents/projects/$(projectId)/decisions/$(incoming().linkedDecisionId))
+            )
+          );
+
+        allow delete: if isVerified()
+          && isValidId(projectId)
+          && isValidId(issueId)
+          && existing().status != 'resolved'
+          && (existing().createdBy == request.auth.uid || isProjectOwner(projectId))
+          && isProjectMember(projectId);
+      }
+
+      // -----------------------------------------------------------------------
+      // Subcollection: /projects/{projectId}/decisions/{decisionId}
+      // -----------------------------------------------------------------------
+      match /decisions/{decisionId} {
+        allow get: if isSignedIn()
+          && isValidId(projectId)
+          && isValidId(decisionId)
+          && isProjectMember(projectId);
+
+        allow list: if isSignedIn()
+          && resource.data.projectId == projectId
+          && isProjectMember(projectId);
+
+        allow create: if isVerified()
+          && isValidId(projectId)
+          && isValidId(decisionId)
+          && isValidDecision(incoming(), projectId)
+          && incoming().createdBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && (
+            incoming().sourceIssueId == ''
+            || exists(/databases/$(database)/documents/projects/$(projectId)/issues/$(incoming().sourceIssueId))
+          )
+          && isProjectMember(projectId);
+
+        allow update: if isVerified()
+          && isValidId(projectId)
+          && isValidId(decisionId)
+          && isValidDecision(incoming(), projectId)
+          && incoming().projectId == existing().projectId
+          && incoming().code == existing().code
+          && incoming().sourceIssueId == existing().sourceIssueId
+          && incoming().sourceIssueCode == existing().sourceIssueCode
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && isProjectMember(projectId)
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'decisionSummary', 'rationale', 'impactModules', 'updatedAt'
+          ]);
+
+        allow delete: if isVerified()
+          && isValidId(projectId)
+          && isValidId(decisionId)
+          && isProjectOwner(projectId);
+      }
+    }
+  }
+}
