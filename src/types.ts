@@ -10,7 +10,21 @@ export type RocStatus = 'pending' | 'approved' | 'on_hold' | 'rejected';
 export type IssuePriority = 'blocker' | 'high' | 'medium';
 export type IssueStatus = 'open' | 'in_review' | 'resolved';
 
-export type ActiveTab = 'dashboard' | 'roc' | 'checklist' | 'issues';
+export type MachineCategory =
+  | 'WORKSTATION'
+  | 'LAPTOP'
+  | 'MINI_PC'
+  | 'EDGE_VISION'
+  | 'ROBOT'
+  | 'PLC'
+  | 'MONITORING';
+
+export type MachineStatus = 'planned' | 'mock' | 'commissioning' | 'deployed' | 'maintenance';
+
+export type Gate1Status = 'PASS' | 'FAIL' | 'SKIPPED';
+export type Gate2Verdict = 'PASS' | 'WARN' | 'FAIL' | 'SKIPPED';
+
+export type ActiveTab = 'dashboard' | 'roc' | 'checklist' | 'issues' | 'inventory';
 
 export interface Project {
   id: string;
@@ -89,6 +103,7 @@ export interface Issue {
   dueDate: string;
   linkedDecisionId: string;
   linkedDecisionCode: string;
+  externalRef?: string;
   createdBy: string;
   createdAt?: Timestamp | null;
   updatedAt?: Timestamp | null;
@@ -111,6 +126,67 @@ export interface Decision {
   updatedAt?: Timestamp | null;
 }
 
+export interface MachineInventory {
+  id: string;
+  projectId: string;
+  machineCode: string;
+  category: MachineCategory;
+  hostnameModel: string;
+  osFirmware: string;
+  runtimeEnv: string;
+  networkLabel: string;
+  nasBackupPath: string;
+  lastBackupDate: string;
+  gitCommitRef: string;
+  recipeVersion: string;
+  status: MachineStatus;
+  notes: string;
+  sortOrder: number;
+  updatedBy: string;
+  updatedAt?: Timestamp | null;
+}
+
+export interface Gate1CheckEntry {
+  returncode: number;
+  durationS: number;
+  skipped: boolean;
+  reason: string;
+}
+
+export interface Gate1Checks {
+  ruff: Gate1CheckEntry;
+  ruffFormat: Gate1CheckEntry;
+  mypy: Gate1CheckEntry;
+  pytest: Gate1CheckEntry;
+}
+
+export interface FindingCounts {
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  info: number;
+}
+
+export interface QualityGateRun {
+  id: string;
+  projectId: string;
+  runCode: string;
+  gitRef: string;
+  reportedAt: string;
+  gate1Status: Gate1Status;
+  gate1Checks: Gate1Checks;
+  gate2Verdict: Gate2Verdict;
+  gate2Model: string;
+  reviewedFileCount: number;
+  securityLocalOnly: boolean;
+  findingCounts: FindingCounts;
+  summary: string;
+  createdBy: string;
+  createdAt?: Timestamp | null;
+  updatedAt?: Timestamp | null;
+}
+
 // Validation limits synchronized verbatim with firebase-blueprint.json & firestore.rules
 export const LIMITS = {
   PROJECT_NAME_MAX: 100,
@@ -123,9 +199,26 @@ export const LIMITS = {
   NOTES_MAX: 1000,
   ROC_TEXT_MAX: 1000,
   ISSUE_DESC_MAX: 1500,
+  EXTERNAL_REF_MAX: 64,
   DECISION_TEXT_MAX: 1500,
+  MACHINE_CODE_MAX: 16,
+  MACHINE_HOST_MAX: 100,
+  MACHINE_OS_MAX: 80,
+  MACHINE_ENV_MAX: 100,
+  MACHINE_NET_MAX: 60,
+  MACHINE_NAS_MAX: 160,
+  MACHINE_GIT_MAX: 60,
+  MACHINE_RECIPE_MAX: 60,
+  MACHINE_NOTES_MAX: 500,
+  QG_GIT_REF_MAX: 60,
+  QG_MODEL_MAX: 80,
+  QG_REASON_MAX: 160,
+  QG_SUMMARY_MAX: 1000,
+  QG_SECURITY_LOCAL_SUMMARY_MAX: 200,
   DATE_PATTERN: /^\d{4}-\d{2}-\d{2}$/,
   INVITE_CODE_PATTERN: /^[A-Z0-9]{6}$/,
+  MACHINE_CODE_PATTERN: /^[A-Z0-9\-]{2,16}$/,
+  GIT_REF_PATTERN: /^[a-zA-Z0-9._/\-]{0,60}$/,
 } as const;
 
 export const ROLE_LABELS: Record<TeamRole, string> = {
@@ -190,6 +283,24 @@ export const ISSUE_STATUS_LABELS: Record<IssueStatus, string> = {
   open: '미결',
   in_review: '검토중',
   resolved: '결정완료',
+};
+
+export const MACHINE_CATEGORY_LABELS: Record<MachineCategory, string> = {
+  WORKSTATION: '워크스테이션',
+  LAPTOP: '개발 노트북',
+  MINI_PC: '미니 PC',
+  EDGE_VISION: '비전 엣지',
+  ROBOT: '다관절 로봇',
+  PLC: 'PLC 마스터',
+  MONITORING: '모니터링 PC',
+};
+
+export const MACHINE_STATUS_LABELS: Record<MachineStatus, string> = {
+  planned: '도입 예정',
+  mock: 'Mock 검증',
+  commissioning: '시운전 중',
+  deployed: '현장 적용',
+  maintenance: '점검/보수',
 };
 
 export const INTERFACE_PAIRS = [

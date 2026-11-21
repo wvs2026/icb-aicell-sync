@@ -342,7 +342,7 @@
     },
     "Issue": {
       "title": "Issue",
-      "description": "Open technical issue tracked across engineering modules that can be atomically converted into a Decision.",
+      "description": "Open technical issue tracked across engineering modules that can be atomically converted into a Decision. Includes optional externalRef for deterministic pipeline import deduplication.",
       "type": "object",
       "properties": {
         "projectId": {
@@ -399,6 +399,11 @@
         "linkedDecisionCode": {
           "type": "string",
           "maxLength": 16
+        },
+        "externalRef": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Optional external pipeline reference key for deterministic import deduplication"
         },
         "createdBy": {
           "type": "string",
@@ -514,6 +519,192 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "MachineInventory": {
+      "title": "MachineInventory",
+      "description": "Tracked cell hardware inventory entry (WS-01, NB-01, MINI-01, EC1~3, MON-01, PLC-01) with Git commit and backup tracking (no secrets or credentials).",
+      "type": "object",
+      "properties": {
+        "projectId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "machineCode": {
+          "type": "string",
+          "pattern": "^[A-Z0-9\\-]{2,16}$",
+          "minLength": 2,
+          "maxLength": 16
+        },
+        "category": {
+          "type": "string",
+          "enum": ["WORKSTATION", "LAPTOP", "MINI_PC", "EDGE_VISION", "ROBOT", "PLC", "MONITORING"]
+        },
+        "hostnameModel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "osFirmware": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "runtimeEnv": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "networkLabel": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "nasBackupPath": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "lastBackupDate": {
+          "type": "string",
+          "pattern": "^(\\d{4}-\\d{2}-\\d{2})?$",
+          "maxLength": 10
+        },
+        "gitCommitRef": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9._/\\-]{0,60}$",
+          "maxLength": 60
+        },
+        "recipeVersion": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "status": {
+          "type": "string",
+          "enum": ["planned", "mock", "commissioning", "deployed", "maintenance"]
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "sortOrder": {
+          "type": "number"
+        },
+        "updatedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "projectId",
+        "machineCode",
+        "category",
+        "hostnameModel",
+        "osFirmware",
+        "runtimeEnv",
+        "networkLabel",
+        "nasBackupPath",
+        "lastBackupDate",
+        "gitCommitRef",
+        "recipeVersion",
+        "status",
+        "notes",
+        "sortOrder",
+        "updatedBy",
+        "updatedAt"
+      ]
+    },
+    "QualityGateRun": {
+      "title": "QualityGateRun",
+      "description": "Immutable Gate 1 (ruff/ruffFormat/mypy/pytest) and Gate 2 (vLLM review) summary report with strict security_local_only enforcement.",
+      "type": "object",
+      "properties": {
+        "projectId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "runCode": {
+          "type": "string",
+          "pattern": "^QG-\\d{3,4}$",
+          "maxLength": 12
+        },
+        "gitRef": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9._/\\-]{1,60}$",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "reportedAt": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "maxLength": 10
+        },
+        "gate1Status": {
+          "type": "string",
+          "enum": ["PASS", "FAIL", "SKIPPED"]
+        },
+        "gate1Checks": {
+          "type": "object",
+          "description": "Fixed 4-key map: ruff (from ruff-check), ruffFormat (from ruff-format), mypy, pytest"
+        },
+        "gate2Verdict": {
+          "type": "string",
+          "enum": ["PASS", "WARN", "FAIL", "SKIPPED"]
+        },
+        "gate2Model": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "reviewedFileCount": {
+          "type": "number"
+        },
+        "securityLocalOnly": {
+          "type": "boolean"
+        },
+        "findingCounts": {
+          "type": "object",
+          "description": "Fixed 5-key severity map: critical, high, medium, low, info"
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "projectId",
+        "runCode",
+        "gitRef",
+        "reportedAt",
+        "gate1Status",
+        "gate1Checks",
+        "gate2Verdict",
+        "gate2Model",
+        "reviewedFileCount",
+        "securityLocalOnly",
+        "findingCounts",
+        "summary",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -539,11 +730,19 @@
     },
     "/projects/{projectId}/issues/{issueId}": {
       "schema": { "$ref": "#/entities/Issue" },
-      "description": "Open technical issues with atomic conversion to decisions"
+      "description": "Open technical issues with optional externalRef deduplication and atomic conversion to decisions"
     },
     "/projects/{projectId}/decisions/{decisionId}": {
       "schema": { "$ref": "#/entities/Decision" },
       "description": "Confirmed engineering decisions linked to source issues"
+    },
+    "/projects/{projectId}/machines/{machineId}": {
+      "schema": { "$ref": "#/entities/MachineInventory" },
+      "description": "8-unit cell hardware inventory (WS-01, NB-01, MINI-01, EC1~3, MON-01, PLC-01)"
+    },
+    "/projects/{projectId}/qualityGates/{runId}": {
+      "schema": { "$ref": "#/entities/QualityGateRun" },
+      "description": "Immutable Gate 1/2 automated quality verification summary records"
     }
   }
 }

@@ -12,7 +12,11 @@ import {
   Issue,
   ISSUE_MODULE_LABELS,
   ISSUE_PRIORITY_LABELS,
+  MACHINE_STATUS_LABELS,
+  MachineInventory,
+  MachineStatus,
   Project,
+  QualityGateRun,
   ROC_STATUS_LABELS,
   RocChange,
   ROLE_SHORT_LABELS,
@@ -26,6 +30,8 @@ interface DashboardTabProps {
   rocChanges: RocChange[];
   issues: Issue[];
   decisions: Decision[];
+  machines: MachineInventory[];
+  qualityGates: QualityGateRun[];
   onNavigateTab: (tab: ActiveTab, options?: { checklistModule?: ChecklistModule; rocId?: string }) => void;
 }
 
@@ -38,6 +44,8 @@ export function DashboardTab({
   rocChanges,
   issues,
   decisions,
+  machines,
+  qualityGates,
   onNavigateTab,
 }: DashboardTabProps) {
   const stats = useMemo(() => {
@@ -105,6 +113,27 @@ export function DashboardTab({
       };
     });
   }, [members, checklists, issues]);
+
+  const pipelineSummary = useMemo(() => {
+    const sortedGates = [...qualityGates].sort((a, b) => b.runCode.localeCompare(a.runCode));
+    const latestGate = sortedGates[0] || null;
+
+    const sortedMachines = [...machines].sort(
+      (a, b) => a.sortOrder - b.sortOrder || a.machineCode.localeCompare(b.machineCode)
+    );
+    const counts: Record<MachineStatus, number> = {
+      deployed: 0,
+      commissioning: 0,
+      mock: 0,
+      planned: 0,
+      maintenance: 0,
+    };
+    for (const m of sortedMachines) {
+      counts[m.status] += 1;
+    }
+
+    return { latestGate, totalGateRuns: sortedGates.length, sortedMachines, counts };
+  }, [qualityGates, machines]);
 
   return (
     <div className="space-y-6">
@@ -345,6 +374,270 @@ export function DashboardTab({
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Pipeline QA Gate 1/2 & 8-Machine Inventory Summary */}
+      <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="lg:col-span-6 bg-white border border-slate-200 rounded-lg p-6 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between gap-4 pb-3.5 border-b border-slate-200">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900">
+                  최근 Gate 1/2 품질 게이트 요약
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  ICB-AICell 정적 검증(ruff-check·mypy·pytest) 및 로컬 vLLM 리뷰 집계
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => onNavigateTab('inventory')}
+                className="text-xs font-medium text-[#1D4ED8] hover:underline whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                품질 이력 ({pipelineSummary.totalGateRuns})
+              </button>
+            </div>
+
+            {pipelineSummary.latestGate ? (
+              <div className="mt-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2 font-mono tabular-nums">
+                    <span className="font-semibold text-slate-900">
+                      {pipelineSummary.latestGate.runCode}
+                    </span>
+                    <span className="text-slate-300">·</span>
+                    <span className="text-[#1D4ED8] font-medium">
+                      {pipelineSummary.latestGate.gitRef}
+                    </span>
+                    <span className="text-slate-300">·</span>
+                    <span className="text-slate-500">{pipelineSummary.latestGate.reportedAt}</span>
+                  </div>
+                  {pipelineSummary.latestGate.securityLocalOnly && (
+                    <span className="font-mono text-[11px] font-semibold text-[#D97706]">
+                      security_local_only
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-3 gap-3 pt-2 border-t border-slate-100 text-xs">
+                  <div>
+                    <div className="text-slate-400">Gate 1 (정적·단위)</div>
+                    <div
+                      className={`font-mono font-bold text-base mt-0.5 ${
+                        pipelineSummary.latestGate.gate1Status === 'PASS'
+                          ? 'text-[#16A34A]'
+                          : pipelineSummary.latestGate.gate1Status === 'FAIL'
+                          ? 'text-[#DC2626]'
+                          : 'text-slate-500'
+                      }`}
+                    >
+                      {pipelineSummary.latestGate.gate1Status}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-slate-400">Gate 2 (vLLM)</div>
+                    <div
+                      className={`font-mono font-bold text-base mt-0.5 ${
+                        pipelineSummary.latestGate.gate2Verdict === 'PASS'
+                          ? 'text-[#16A34A]'
+                          : pipelineSummary.latestGate.gate2Verdict === 'FAIL'
+                          ? 'text-[#DC2626]'
+                          : pipelineSummary.latestGate.gate2Verdict === 'WARN'
+                          ? 'text-[#D97706]'
+                          : 'text-slate-500'
+                      }`}
+                    >
+                      {pipelineSummary.latestGate.gate2Verdict}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-slate-400">지적 (C / H / M)</div>
+                    <div className="font-mono tabular-nums font-bold text-base text-slate-900 mt-0.5">
+                      <span
+                        className={
+                          pipelineSummary.latestGate.findingCounts.critical > 0
+                            ? 'text-[#DC2626]'
+                            : ''
+                        }
+                      >
+                        {pipelineSummary.latestGate.findingCounts.critical}
+                      </span>{' '}
+                      /{' '}
+                      <span
+                        className={
+                          pipelineSummary.latestGate.findingCounts.high > 0 ? 'text-[#D97706]' : ''
+                        }
+                      >
+                        {pipelineSummary.latestGate.findingCounts.high}
+                      </span>{' '}
+                      / {pipelineSummary.latestGate.findingCounts.medium}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-xs font-mono tabular-nums text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-1 pt-2 border-t border-slate-100">
+                  <span>
+                    ruff-check:{' '}
+                    <strong
+                      className={
+                        pipelineSummary.latestGate.gate1Checks.ruff.skipped
+                          ? 'text-slate-400'
+                          : pipelineSummary.latestGate.gate1Checks.ruff.returncode === 0
+                          ? 'text-[#16A34A]'
+                          : 'text-[#DC2626]'
+                      }
+                    >
+                      {pipelineSummary.latestGate.gate1Checks.ruff.skipped
+                        ? 'SKIP'
+                        : pipelineSummary.latestGate.gate1Checks.ruff.returncode === 0
+                        ? 'PASS'
+                        : 'FAIL'}
+                    </strong>
+                  </span>
+                  <span>
+                    mypy:{' '}
+                    <strong
+                      className={
+                        pipelineSummary.latestGate.gate1Checks.mypy.skipped
+                          ? 'text-slate-400'
+                          : pipelineSummary.latestGate.gate1Checks.mypy.returncode === 0
+                          ? 'text-[#16A34A]'
+                          : 'text-[#DC2626]'
+                      }
+                    >
+                      {pipelineSummary.latestGate.gate1Checks.mypy.skipped
+                        ? 'SKIP'
+                        : pipelineSummary.latestGate.gate1Checks.mypy.returncode === 0
+                        ? 'PASS'
+                        : 'FAIL'}
+                    </strong>
+                  </span>
+                  <span>
+                    pytest:{' '}
+                    <strong
+                      className={
+                        pipelineSummary.latestGate.gate1Checks.pytest.skipped
+                          ? 'text-slate-400'
+                          : pipelineSummary.latestGate.gate1Checks.pytest.returncode === 0
+                          ? 'text-[#16A34A]'
+                          : 'text-[#DC2626]'
+                      }
+                    >
+                      {pipelineSummary.latestGate.gate1Checks.pytest.skipped
+                        ? 'SKIP'
+                        : pipelineSummary.latestGate.gate1Checks.pytest.returncode === 0
+                        ? 'PASS'
+                        : 'FAIL'}
+                    </strong>
+                  </span>
+                </div>
+
+                {pipelineSummary.latestGate.summary && (
+                  <p className="text-xs text-slate-600 leading-relaxed bg-slate-50 border border-slate-100 rounded p-2.5 line-clamp-2">
+                    {pipelineSummary.latestGate.summary}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="py-10 text-center text-xs text-slate-500">
+                기록된 Gate 1/2 품질 검증 이력이 없습니다. JSON Import로 첫 실행 결과를 등록하세요.
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="lg:col-span-6 bg-white border border-slate-200 rounded-lg p-6 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between gap-4 pb-3.5 border-b border-slate-200">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900">
+                  장비 인벤토리 현황 ({pipelineSummary.sortedMachines.length}종)
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  WS-01 · EC1~3 · MON-01 · PLC-01 배포 상태 및 Git 기준선 추적
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => onNavigateTab('inventory')}
+                className="text-xs font-medium text-[#1D4ED8] hover:underline whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                인벤토리 관리
+              </button>
+            </div>
+
+            {pipelineSummary.sortedMachines.length === 0 ? (
+              <div className="py-10 text-center text-xs text-slate-500">
+                등록된 장비가 없습니다. 장비 인벤토리 탭에서 기본 8종을 초기화할 수 있습니다.
+              </div>
+            ) : (
+              <div className="mt-4 space-y-3">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-mono tabular-nums text-slate-600 pb-2.5 border-b border-slate-100">
+                  <span>
+                    현장 적용{' '}
+                    <strong className="text-[#16A34A]">{pipelineSummary.counts.deployed}</strong>
+                  </span>
+                  <span>
+                    시운전{' '}
+                    <strong className="text-[#1D4ED8]">
+                      {pipelineSummary.counts.commissioning}
+                    </strong>
+                  </span>
+                  <span>
+                    Mock <strong className="text-[#D97706]">{pipelineSummary.counts.mock}</strong>
+                  </span>
+                  <span>
+                    도입 예정{' '}
+                    <strong className="text-slate-700">{pipelineSummary.counts.planned}</strong>
+                  </span>
+                  {pipelineSummary.counts.maintenance > 0 && (
+                    <span>
+                      점검{' '}
+                      <strong className="text-[#DC2626]">
+                        {pipelineSummary.counts.maintenance}
+                      </strong>
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 divide-y sm:divide-y-0 divide-slate-100">
+                  {pipelineSummary.sortedMachines.slice(0, 8).map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => onNavigateTab('inventory')}
+                      className="py-1.5 flex items-center justify-between gap-2 text-xs hover:bg-slate-50/80 px-1.5 -mx-1.5 rounded text-left cursor-pointer"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="font-mono font-semibold text-slate-900 w-14 shrink-0">
+                          {m.machineCode}
+                        </span>
+                        <span className="text-slate-500 font-mono text-[11px] truncate">
+                          {m.gitCommitRef || m.hostnameModel}
+                        </span>
+                      </div>
+                      <span
+                        className={`font-medium shrink-0 ${
+                          m.status === 'deployed'
+                            ? 'text-[#16A34A]'
+                            : m.status === 'commissioning'
+                            ? 'text-[#1D4ED8]'
+                            : m.status === 'mock'
+                            ? 'text-[#D97706]'
+                            : m.status === 'maintenance'
+                            ? 'text-[#DC2626]'
+                            : 'text-slate-500'
+                        }`}
+                      >
+                        {MACHINE_STATUS_LABELS[m.status]}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </section>

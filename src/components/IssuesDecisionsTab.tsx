@@ -1,5 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, CheckCircle2, Link2, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
+import {
+  ArrowLeftRight,
+  ArrowRight,
+  CheckCircle2,
+  Link2,
+  Pencil,
+  Plus,
+  Search,
+  Trash2,
+  X,
+} from 'lucide-react';
 import {
   convertIssueToDecisionAtomic,
   createDecision,
@@ -37,6 +47,7 @@ interface IssuesDecisionsTabProps {
   issues: Issue[];
   decisions: Decision[];
   openCreateIssueTrigger: number;
+  onOpenSyncModal: (mode: 'import' | 'export') => void;
   onToast: (msg: string) => void;
 }
 
@@ -54,6 +65,7 @@ export function IssuesDecisionsTab({
   issues,
   decisions,
   openCreateIssueTrigger,
+  onOpenSyncModal,
   onToast,
 }: IssuesDecisionsTabProps) {
   const [subView, setSubView] = useState<'issues' | 'decisions'>('issues');
@@ -72,6 +84,7 @@ export function IssuesDecisionsTab({
   const [issStatus, setIssStatus] = useState<'open' | 'in_review'>('open');
   const [issAssigneeRole, setIssAssigneeRole] = useState<TeamRole>('VISION');
   const [issDueDate, setIssDueDate] = useState(addDaysDateStr(5));
+  const [issExternalRef, setIssExternalRef] = useState('');
   const [savingIssue, setSavingIssue] = useState(false);
 
   // One-Click Convert Issue -> Decision Modal (or Standalone Decision Modal)
@@ -117,7 +130,7 @@ export function IssuesDecisionsTab({
         }
         if (moduleFilter !== 'all' && i.module !== moduleFilter) return false;
         if (q) {
-          const hay = `${i.code} ${i.title} ${i.description} ${i.assigneeName}`.toLowerCase();
+          const hay = `${i.code} ${i.title} ${i.description} ${i.assigneeName} ${i.externalRef || ''}`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
         return true;
@@ -155,6 +168,7 @@ export function IssuesDecisionsTab({
     setIssStatus('open');
     setIssAssigneeRole(currentMember?.role || 'VISION');
     setIssDueDate(addDaysDateStr(5));
+    setIssExternalRef('');
     setIssueModalOpen(true);
   };
 
@@ -168,6 +182,7 @@ export function IssuesDecisionsTab({
     setIssStatus(issue.status);
     setIssAssigneeRole(issue.assigneeRole);
     setIssDueDate(issue.dueDate);
+    setIssExternalRef(issue.externalRef || '');
     setIssueModalOpen(true);
   };
 
@@ -234,6 +249,7 @@ export function IssuesDecisionsTab({
             assigneeRole: issAssigneeRole,
             assigneeName,
             dueDate: issDueDate,
+            externalRef: issExternalRef.trim() || undefined,
           }
         );
         onToast('새 미결 이슈가 등록되었습니다.');
@@ -383,6 +399,15 @@ export function IssuesDecisionsTab({
             />
           </div>
 
+          <button
+            type="button"
+            onClick={() => onOpenSyncModal(subView === 'decisions' ? 'export' : 'import')}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 border border-slate-200 rounded-md hover:bg-slate-50 cursor-pointer whitespace-nowrap shrink-0"
+          >
+            <ArrowLeftRight className="w-3.5 h-3.5" />
+            {subView === 'decisions' ? 'JSON Export' : 'JSON Import'}
+          </button>
+
           {subView === 'decisions' && (
             <button
               type="button"
@@ -481,6 +506,14 @@ export function IssuesDecisionsTab({
                           <span>담당: {issue.assigneeName}</span>
                           <span aria-hidden="true">·</span>
                           <span className="font-mono tabular-nums">목표 해결일 {issue.dueDate}</span>
+                          {issue.externalRef && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="font-mono text-slate-500">
+                                ref: {issue.externalRef}
+                              </span>
+                            </>
+                          )}
                           {isResolved && issue.linkedDecisionCode && (
                             <>
                               <span aria-hidden="true">·</span>
@@ -754,6 +787,21 @@ export function IssuesDecisionsTab({
                     className="w-full px-3 py-1.5 text-xs font-mono tabular-nums border border-slate-200 rounded-md focus:outline-none focus:border-[#1D4ED8]"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  외부 참조 키 (externalRef · 선택, 중복 Import 방지용)
+                </label>
+                <input
+                  type="text"
+                  disabled={Boolean(editingIssue)}
+                  maxLength={LIMITS.EXTERNAL_REF_MAX}
+                  value={issExternalRef}
+                  onChange={(e) => setIssExternalRef(e.target.value)}
+                  placeholder="예: handoff-6.1-ec1-2d3d (등록 후 변경 불가)"
+                  className="w-full px-3 py-2 text-xs font-mono border border-slate-200 rounded-md disabled:bg-slate-50 disabled:text-slate-500 focus:outline-none focus:border-[#1D4ED8]"
+                />
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-200">

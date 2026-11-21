@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import {
+  ArrowLeftRight,
   Check,
   CheckSquare,
   Copy,
@@ -11,6 +12,7 @@ import {
   LogOut,
   Menu,
   Plus,
+  Server,
   Settings,
   Users,
   X,
@@ -20,7 +22,9 @@ import { AuthGate } from './components/AuthGate';
 import { ChecklistTab } from './components/ChecklistTab';
 import { DashboardTab } from './components/DashboardTab';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { InventoryQaTab } from './components/InventoryQaTab';
 import { IssuesDecisionsTab } from './components/IssuesDecisionsTab';
+import { PipelineSyncModal } from './components/PipelineSyncModal';
 import { RocTab } from './components/RocTab';
 import { ProjectSettingsModal, TeamRoleModal } from './components/WorkspaceModals';
 import {
@@ -29,7 +33,9 @@ import {
   ChecklistModule,
   Decision,
   Issue,
+  MachineInventory,
   Project,
+  QualityGateRun,
   RocChange,
   ROLE_SHORT_LABELS,
   TeamMember,
@@ -45,6 +51,7 @@ const TAB_ITEMS: Array<{
   { id: 'roc', index: '2', label: 'ROC/사양 변경 이력', icon: FileDiff },
   { id: 'checklist', index: '3', label: '모듈별 체크리스트', icon: CheckSquare },
   { id: 'issues', index: '4', label: '미결 이슈 및 결정사항', icon: GitPullRequestDraft },
+  { id: 'inventory', index: '5', label: '장비 인벤토리 및 QA 게이트', icon: Server },
 ];
 
 const ROLE_ORDER: Record<string, number> = { PM: 0, VISION: 1, ROBOT: 2, PLC: 3, UI: 4 };
@@ -64,6 +71,8 @@ function WorkspaceApp() {
   const [rocChanges, setRocChanges] = useState<RocChange[]>([]);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
+  const [machines, setMachines] = useState<MachineInventory[]>([]);
+  const [qualityGates, setQualityGates] = useState<QualityGateRun[]>([]);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
 
   // UI Navigation & Deep-link state
@@ -82,8 +91,16 @@ function WorkspaceApp() {
   // Modals & Toast
   const [roleModalOpen, setRoleModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [syncModalOpen, setSyncModalOpen] = useState(false);
+  const [syncModalMode, setSyncModalMode] = useState<'import' | 'export'>('import');
   const [copiedInvite, setCopiedInvite] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+
+  const openSyncModal = (mode: 'import' | 'export' = 'import') => {
+    setSyncModalMode(mode);
+    setSyncModalOpen(true);
+    setMobileMenuOpen(false);
+  };
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -140,6 +157,8 @@ function WorkspaceApp() {
       setRocChanges([]);
       setIssues([]);
       setDecisions([]);
+      setMachines([]);
+      setQualityGates([]);
       return;
     }
 
@@ -147,7 +166,7 @@ function WorkspaceApp() {
     let readyCount = 0;
     const markReady = () => {
       readyCount += 1;
-      if (readyCount >= 5) setWorkspaceLoading(false);
+      if (readyCount >= 7) setWorkspaceLoading(false);
     };
 
     const unsubMembers = onSnapshot(
@@ -222,12 +241,44 @@ function WorkspaceApp() {
         handleFirestoreError(err, OperationType.LIST, `projects/${activeProjectId}/decisions`)
     );
 
+    const unsubMachines = onSnapshot(
+      query(
+        collection(db, 'projects', activeProjectId, 'machines'),
+        where('projectId', '==', activeProjectId)
+      ),
+      (snap) => {
+        setMachines(
+          snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<MachineInventory, 'id'>) }))
+        );
+        markReady();
+      },
+      (err) =>
+        handleFirestoreError(err, OperationType.LIST, `projects/${activeProjectId}/machines`)
+    );
+
+    const unsubQualityGates = onSnapshot(
+      query(
+        collection(db, 'projects', activeProjectId, 'qualityGates'),
+        where('projectId', '==', activeProjectId)
+      ),
+      (snap) => {
+        setQualityGates(
+          snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<QualityGateRun, 'id'>) }))
+        );
+        markReady();
+      },
+      (err) =>
+        handleFirestoreError(err, OperationType.LIST, `projects/${activeProjectId}/qualityGates`)
+    );
+
     return () => {
       unsubMembers();
       unsubChecklists();
       unsubRocs();
       unsubIssues();
       unsubDecisions();
+      unsubMachines();
+      unsubQualityGates();
     };
   }, [authReady, user, activeProjectId]);
 
@@ -274,6 +325,8 @@ function WorkspaceApp() {
       setChecklistCreateTrigger((n) => n + 1);
     } else if (activeTab === 'issues') {
       setIssueCreateTrigger((n) => n + 1);
+    } else if (activeTab === 'inventory') {
+      openSyncModal('import');
     } else {
       setSettingsModalOpen(true);
     }
@@ -314,6 +367,8 @@ function WorkspaceApp() {
       ? '체크 항목 추가'
       : activeTab === 'issues'
       ? '이슈 등록'
+      : activeTab === 'inventory'
+      ? 'JSON Import / Export'
       : '프로젝트 설정';
 
   const sidebarContent = (
@@ -387,8 +442,20 @@ function WorkspaceApp() {
           );
         })}
 
+        {/* ICB Pipeline JSON Import / Export Quick Trigger */}
+        <div className="pt-3 mt-3 border-t border-slate-200">
+          <button
+            type="button"
+            onClick={() => openSyncModal('import')}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-md hover:bg-slate-100 hover:border-slate-300 transition-colors cursor-pointer whitespace-nowrap"
+          >
+            <ArrowLeftRight className="w-3.5 h-3.5 text-[#1D4ED8] shrink-0" />
+            ICB 파이프라인 JSON 연동
+          </button>
+        </div>
+
         {/* 5-Engineer Team Roster */}
-        <div className="pt-5 mt-5 border-t border-slate-200">
+        <div className="pt-4 mt-4 border-t border-slate-200">
           <div className="px-2 flex items-center justify-between mb-2">
             <span className="text-xs font-medium text-slate-400">5인 팀원 파트</span>
             <button
@@ -527,6 +594,8 @@ function WorkspaceApp() {
             >
               {activeTab === 'dashboard' ? (
                 <Settings className="w-3.5 h-3.5" />
+              ) : activeTab === 'inventory' ? (
+                <ArrowLeftRight className="w-3.5 h-3.5" />
               ) : (
                 <Plus className="w-3.5 h-3.5" />
               )}
@@ -562,6 +631,8 @@ function WorkspaceApp() {
                   rocChanges={rocChanges}
                   issues={issues}
                   decisions={decisions}
+                  machines={machines}
+                  qualityGates={qualityGates}
                   onNavigateTab={handleNavigateTab}
                 />
               )}
@@ -602,6 +673,20 @@ function WorkspaceApp() {
                   issues={issues}
                   decisions={decisions}
                   openCreateIssueTrigger={issueCreateTrigger}
+                  onOpenSyncModal={openSyncModal}
+                  onToast={showToast}
+                />
+              )}
+
+              {activeTab === 'inventory' && (
+                <InventoryQaTab
+                  projectId={activeProject.id}
+                  projectName={activeProject.name}
+                  projectOwnerId={activeProject.ownerId}
+                  currentUid={user.uid}
+                  machines={machines}
+                  qualityGates={qualityGates}
+                  onOpenSyncModal={openSyncModal}
                   onToast={showToast}
                 />
               )}
@@ -609,6 +694,22 @@ function WorkspaceApp() {
           )}
         </main>
       </div>
+
+      {/* ICB-AICell Pipeline JSON Import / Export Modal */}
+      {syncModalOpen && (
+        <PipelineSyncModal
+          project={activeProject}
+          members={members}
+          issues={issues}
+          rocChanges={rocChanges}
+          decisions={decisions}
+          machines={machines}
+          qualityGates={qualityGates}
+          initialMode={syncModalMode}
+          onClose={() => setSyncModalOpen(false)}
+          onToast={showToast}
+        />
+      )}
 
       {/* Role Assignment Modal */}
       {roleModalOpen && (

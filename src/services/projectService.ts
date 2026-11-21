@@ -1,5 +1,5 @@
 import {
-  collection,
+  arrayUnion,
   deleteDoc,
   doc,
   getDoc,
@@ -13,6 +13,8 @@ import {
   buildSeedChecklists,
   buildSeedDecisions,
   buildSeedIssues,
+  buildSeedMachines,
+  buildSeedQualityGates,
   buildSeedRocs,
   PRESET_MEMBERS,
 } from '../data/seedData';
@@ -28,11 +30,18 @@ import {
   IssuePriority,
   IssueStatus,
   LIMITS,
+  MachineCategory,
+  MachineStatus,
   Project,
   RocChange,
   RocStatus,
   TeamRole,
 } from '../types';
+import {
+  ParsedCandidateIssue,
+  ParsedCandidateMachine,
+  ParsedQualityGatePayload,
+} from './pipelineSync';
 
 function clip(value: string, max: number): string {
   return value.trim().slice(0, max);
@@ -185,6 +194,7 @@ export async function createWorkspaceWithSeed(params: {
         dueDate: issue.dueDate,
         linkedDecisionId: '',
         linkedDecisionCode: '',
+        externalRef: clip(issue.externalRef || '', LIMITS.EXTERNAL_REF_MAX),
         createdBy: user.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -204,6 +214,52 @@ export async function createWorkspaceWithSeed(params: {
         decidedDate: dec.decidedDate,
         sourceIssueId: '',
         sourceIssueCode: '',
+        createdBy: user.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    for (const m of buildSeedMachines()) {
+      const ref = doc(db, 'projects', projectId, 'machines', m.machineCode);
+      batch2.set(ref, {
+        projectId,
+        machineCode: m.machineCode,
+        category: m.category,
+        hostnameModel: clip(m.hostnameModel, LIMITS.MACHINE_HOST_MAX),
+        osFirmware: clip(m.osFirmware, LIMITS.MACHINE_OS_MAX),
+        runtimeEnv: clip(m.runtimeEnv, LIMITS.MACHINE_ENV_MAX),
+        networkLabel: clip(m.networkLabel, LIMITS.MACHINE_NET_MAX),
+        nasBackupPath: clip(m.nasBackupPath, LIMITS.MACHINE_NAS_MAX),
+        lastBackupDate: m.lastBackupDate,
+        gitCommitRef: clip(m.gitCommitRef, LIMITS.MACHINE_GIT_MAX),
+        recipeVersion: clip(m.recipeVersion, LIMITS.MACHINE_RECIPE_MAX),
+        status: m.status,
+        notes: clip(m.notes, LIMITS.MACHINE_NOTES_MAX),
+        sortOrder: m.sortOrder,
+        updatedBy: user.uid,
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    for (const qg of buildSeedQualityGates()) {
+      const ref = doc(db, 'projects', projectId, 'qualityGates', generateId('qg'));
+      batch2.set(ref, {
+        projectId,
+        runCode: qg.runCode,
+        gitRef: clip(qg.gitRef, LIMITS.QG_GIT_REF_MAX),
+        reportedAt: qg.reportedAt,
+        gate1Status: qg.gate1Status,
+        gate1Checks: qg.gate1Checks,
+        gate2Verdict: qg.gate2Verdict,
+        gate2Model: clip(qg.gate2Model, LIMITS.QG_MODEL_MAX),
+        reviewedFileCount: qg.reviewedFileCount,
+        securityLocalOnly: qg.securityLocalOnly,
+        findingCounts: qg.findingCounts,
+        summary: clip(
+          qg.summary,
+          qg.securityLocalOnly ? LIMITS.QG_SECURITY_LOCAL_SUMMARY_MAX : LIMITS.QG_SUMMARY_MAX
+        ),
         createdBy: user.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -244,7 +300,6 @@ export async function joinWorkspaceByCode(rawCode: string): Promise<{ projectId:
   const inviteData = inviteSnap.data() as { projectId: string; projectName: string };
   const projectRef = doc(db, 'projects', inviteData.projectId);
 
-  // Check if already a member
   try {
     const existingProj = await getDoc(projectRef);
     if (existingProj.exists()) {
@@ -254,14 +309,9 @@ export async function joinWorkspaceByCode(rawCode: string): Promise<{ projectId:
       }
     }
   } catch {
-    // Non-members cannot read the project before joining; proceed to Join action
+    // Non-members cannot read project before joining
   }
 
-  // Wait: Because non-members cannot read existing memberUids before joining,
-  // Firestore arrayUnion handles appending without reading existing array?
-  // Note: Rules check incoming().memberUids.hasAll(existing().memberUids) and size == size + 1.
-  // arrayUnion(user.uid) evaluates cleanly on the server!
-  const { arrayUnion } = await import('firebase/firestore');
   try {
     await updateDoc(projectRef, {
       memberUids: arrayUnion(user.uid),
@@ -436,9 +486,12 @@ export async function deleteChecklistItem(projectId: string, itemId: string) {
 }
 
 // ---------------------------------------------------------------------------
-// ROC / Spec Change History CRUD
+// Sequential Code Helper
 // ---------------------------------------------------------------------------
-export function computeNextCode(prefix: 'ROC' | 'ISS' | 'DEC', existingCodes: string[]): string {
+export function computeNextCode(
+  prefix: 'ROC' | 'ISS' | 'DEC' | 'QG',
+  existingCodes: string[]
+): string {
   let maxNum = 0;
   const re = new RegExp(`^${prefix}-(\\d+)$`);
   for (const code of existingCodes) {
@@ -451,6 +504,9 @@ export function computeNextCode(prefix: 'ROC' | 'ISS' | 'DEC', existingCodes: st
   return `${prefix}-${String(maxNum + 1).padStart(3, '0')}`;
 }
 
+// ---------------------------------------------------------------------------
+// ROC / Spec Change History CRUD
+// ---------------------------------------------------------------------------
 export async function createRocChange(
   projectId: string,
   existingCodes: string[],
@@ -561,6 +617,7 @@ export async function createIssue(
     assigneeName: string;
     assigneeRole: TeamRole;
     dueDate: string;
+    externalRef?: string;
   }
 ) {
   const user = auth.currentUser;
@@ -582,6 +639,7 @@ export async function createIssue(
       dueDate: input.dueDate,
       linkedDecisionId: '',
       linkedDecisionCode: '',
+      externalRef: clip(input.externalRef || '', LIMITS.EXTERNAL_REF_MAX),
       createdBy: user.uid,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -626,10 +684,6 @@ export async function deleteIssue(projectId: string, issueId: string) {
   }
 }
 
-/**
- * Atomically converts an open/in_review Issue into a confirmed Decision using a single writeBatch.
- * Enforced by firestore.rules existsAfter() check on the Decision document.
- */
 export async function convertIssueToDecisionAtomic(
   projectId: string,
   issue: Issue,
@@ -756,4 +810,270 @@ export async function deleteDecision(projectId: string, decisionId: string) {
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Stage 2: Machine Inventory CRUD & Preset Seeder
+// ---------------------------------------------------------------------------
+export async function upsertMachine(
+  projectId: string,
+  input: {
+    machineCode: string;
+    category: MachineCategory;
+    hostnameModel: string;
+    osFirmware: string;
+    runtimeEnv: string;
+    networkLabel: string;
+    nasBackupPath: string;
+    lastBackupDate: string;
+    gitCommitRef: string;
+    recipeVersion: string;
+    status: MachineStatus;
+    notes: string;
+    sortOrder: number;
+  },
+  isExisting: boolean
+) {
+  const user = auth.currentUser;
+  if (!user) throw new Error('로그인이 필요합니다.');
+  const code = input.machineCode.trim().toUpperCase().replace(/[^A-Z0-9\-]/g, '').slice(0, LIMITS.MACHINE_CODE_MAX);
+  const path = `projects/${projectId}/machines/${code}`;
+  const ref = doc(db, 'projects', projectId, 'machines', code);
+
+  const payload = {
+    category: input.category,
+    hostnameModel: clip(input.hostnameModel, LIMITS.MACHINE_HOST_MAX) || code,
+    osFirmware: clip(input.osFirmware, LIMITS.MACHINE_OS_MAX) || 'TBD',
+    runtimeEnv: clip(input.runtimeEnv, LIMITS.MACHINE_ENV_MAX),
+    networkLabel: clip(input.networkLabel, LIMITS.MACHINE_NET_MAX),
+    nasBackupPath: clip(input.nasBackupPath, LIMITS.MACHINE_NAS_MAX),
+    lastBackupDate: LIMITS.DATE_PATTERN.test(input.lastBackupDate) ? input.lastBackupDate : '',
+    gitCommitRef: input.gitCommitRef.trim().replace(/[^a-zA-Z0-9._/@\-]/g, '').slice(0, LIMITS.MACHINE_GIT_MAX),
+    recipeVersion: clip(input.recipeVersion, LIMITS.MACHINE_RECIPE_MAX),
+    status: input.status,
+    notes: clip(input.notes, LIMITS.MACHINE_NOTES_MAX),
+    sortOrder: Math.max(0, Math.min(1000, Math.round(input.sortOrder))),
+    updatedBy: user.uid,
+    updatedAt: serverTimestamp(),
+  };
+
+  try {
+    if (isExisting) {
+      await updateDoc(ref, payload);
+    } else {
+      await setDoc(ref, {
+        projectId,
+        machineCode: code,
+        ...payload,
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, isExisting ? OperationType.UPDATE : OperationType.CREATE, path);
+  }
+}
+
+export async function seedDefaultMachines(projectId: string) {
+  const user = auth.currentUser;
+  if (!user) throw new Error('로그인이 필요합니다.');
+  const batch = writeBatch(db);
+  for (const m of buildSeedMachines()) {
+    const ref = doc(db, 'projects', projectId, 'machines', m.machineCode);
+    batch.set(ref, {
+      projectId,
+      machineCode: m.machineCode,
+      category: m.category,
+      hostnameModel: clip(m.hostnameModel, LIMITS.MACHINE_HOST_MAX),
+      osFirmware: clip(m.osFirmware, LIMITS.MACHINE_OS_MAX),
+      runtimeEnv: clip(m.runtimeEnv, LIMITS.MACHINE_ENV_MAX),
+      networkLabel: clip(m.networkLabel, LIMITS.MACHINE_NET_MAX),
+      nasBackupPath: clip(m.nasBackupPath, LIMITS.MACHINE_NAS_MAX),
+      lastBackupDate: m.lastBackupDate,
+      gitCommitRef: clip(m.gitCommitRef, LIMITS.MACHINE_GIT_MAX),
+      recipeVersion: clip(m.recipeVersion, LIMITS.MACHINE_RECIPE_MAX),
+      status: m.status,
+      notes: clip(m.notes, LIMITS.MACHINE_NOTES_MAX),
+      sortOrder: m.sortOrder,
+      updatedBy: user.uid,
+      updatedAt: serverTimestamp(),
+    });
+  }
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `projects/${projectId}/machines`);
+  }
+}
+
+export async function deleteMachine(projectId: string, machineId: string) {
+  const path = `projects/${projectId}/machines/${machineId}`;
+  try {
+    await deleteDoc(doc(db, 'projects', projectId, 'machines', machineId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Stage 2: QualityGateRun & Pipeline Bundle Batch Commit
+// ---------------------------------------------------------------------------
+export async function createQualityGateRun(
+  projectId: string,
+  existingRunCodes: string[],
+  input: ParsedQualityGatePayload
+): Promise<string> {
+  const user = auth.currentUser;
+  if (!user) throw new Error('로그인이 필요합니다.');
+  const runId = generateId('qg');
+  const runCode = computeNextCode('QG', existingRunCodes);
+  const path = `projects/${projectId}/qualityGates/${runId}`;
+
+  try {
+    await setDoc(doc(db, 'projects', projectId, 'qualityGates', runId), {
+      projectId,
+      runCode,
+      gitRef: clip(input.gitRef, LIMITS.QG_GIT_REF_MAX) || 'local',
+      reportedAt: LIMITS.DATE_PATTERN.test(input.reportedAt)
+        ? input.reportedAt
+        : addDaysDateStr(0),
+      gate1Status: input.gate1Status,
+      gate1Checks: input.gate1Checks,
+      gate2Verdict: input.gate2Verdict,
+      gate2Model: clip(input.gate2Model, LIMITS.QG_MODEL_MAX),
+      reviewedFileCount: Math.max(0, Math.min(5000, Math.round(input.reviewedFileCount))),
+      securityLocalOnly: Boolean(input.securityLocalOnly),
+      findingCounts: input.findingCounts,
+      summary: clip(
+        input.summary,
+        input.securityLocalOnly ? LIMITS.QG_SECURITY_LOCAL_SUMMARY_MAX : LIMITS.QG_SUMMARY_MAX
+      ),
+      createdBy: user.uid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+  return runCode;
+}
+
+export async function deleteQualityGateRun(projectId: string, runId: string) {
+  const path = `projects/${projectId}/qualityGates/${runId}`;
+  try {
+    await deleteDoc(doc(db, 'projects', projectId, 'qualityGates', runId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+/**
+ * Commits selected parsed pipeline bundle items (QualityGateRun, deduplicated Issues,
+ * and MachineInventory upserts) in safe chunks adhering strictly to firestore.rules.
+ */
+export async function commitPipelineImportBatch(params: {
+  projectId: string;
+  existingIssueCodes: string[];
+  existingRunCodes: string[];
+  qualityGate: ParsedQualityGatePayload | null;
+  includeQualityGate: boolean;
+  selectedIssues: ParsedCandidateIssue[];
+  selectedMachines: ParsedCandidateMachine[];
+}): Promise<{
+  savedRunCode: string | null;
+  importedIssueCount: number;
+  upsertedMachineCount: number;
+}> {
+  const user = auth.currentUser;
+  if (!user) throw new Error('로그인이 필요합니다.');
+
+  let savedRunCode: string | null = null;
+
+  // 1. Create QualityGateRun if selected
+  if (params.includeQualityGate && params.qualityGate) {
+    savedRunCode = await createQualityGateRun(
+      params.projectId,
+      params.existingRunCodes,
+      params.qualityGate
+    );
+  }
+
+  // 2. Import selected issues in chunks of 80
+  const runningCodes = [...params.existingIssueCodes];
+  const CHUNK_SIZE = 80;
+  for (let i = 0; i < params.selectedIssues.length; i += CHUNK_SIZE) {
+    const chunk = params.selectedIssues.slice(i, i + CHUNK_SIZE);
+    const batch = writeBatch(db);
+    for (const iss of chunk) {
+      const issueId = generateId('iss');
+      const nextCode = computeNextCode('ISS', runningCodes);
+      runningCodes.push(nextCode);
+      const ref = doc(db, 'projects', params.projectId, 'issues', issueId);
+      batch.set(ref, {
+        projectId: params.projectId,
+        code: nextCode,
+        title: clip(iss.title, LIMITS.TITLE_MAX),
+        description: clip(iss.description, LIMITS.ISSUE_DESC_MAX),
+        module: iss.module,
+        priority: iss.priority,
+        status: 'open' as IssueStatus,
+        assigneeName: clip(iss.assigneeName, LIMITS.DISPLAY_NAME_MAX),
+        assigneeRole: iss.assigneeRole,
+        dueDate: LIMITS.DATE_PATTERN.test(iss.dueDate) ? iss.dueDate : addDaysDateStr(7),
+        linkedDecisionId: '',
+        linkedDecisionCode: '',
+        externalRef: clip(iss.externalRef, LIMITS.EXTERNAL_REF_MAX),
+        createdBy: user.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    try {
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `projects/${params.projectId}/issues`);
+    }
+  }
+
+  // 3. Upsert selected machines
+  if (params.selectedMachines.length > 0) {
+    const batch = writeBatch(db);
+    for (const m of params.selectedMachines) {
+      const ref = doc(db, 'projects', params.projectId, 'machines', m.machineCode);
+      const baseFields = {
+        category: m.category,
+        hostnameModel: clip(m.hostnameModel, LIMITS.MACHINE_HOST_MAX) || m.machineCode,
+        osFirmware: clip(m.osFirmware, LIMITS.MACHINE_OS_MAX) || 'TBD',
+        runtimeEnv: clip(m.runtimeEnv, LIMITS.MACHINE_ENV_MAX),
+        networkLabel: clip(m.networkLabel, LIMITS.MACHINE_NET_MAX),
+        nasBackupPath: clip(m.nasBackupPath, LIMITS.MACHINE_NAS_MAX),
+        lastBackupDate: LIMITS.DATE_PATTERN.test(m.lastBackupDate) ? m.lastBackupDate : '',
+        gitCommitRef: m.gitCommitRef.slice(0, LIMITS.MACHINE_GIT_MAX),
+        recipeVersion: clip(m.recipeVersion, LIMITS.MACHINE_RECIPE_MAX),
+        status: m.status,
+        notes: clip(m.notes, LIMITS.MACHINE_NOTES_MAX),
+        sortOrder: m.sortOrder,
+        updatedBy: user.uid,
+        updatedAt: serverTimestamp(),
+      };
+      if (m.isUpdate) {
+        batch.update(ref, baseFields);
+      } else {
+        batch.set(ref, {
+          projectId: params.projectId,
+          machineCode: m.machineCode,
+          ...baseFields,
+        });
+      }
+    }
+    try {
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `projects/${params.projectId}/machines`);
+    }
+  }
+
+  return {
+    savedRunCode,
+    importedIssueCount: params.selectedIssues.length,
+    upsertedMachineCount: params.selectedMachines.length,
+  };
 }
